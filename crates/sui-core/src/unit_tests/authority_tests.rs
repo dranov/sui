@@ -199,7 +199,7 @@ async fn construct_shared_object_transaction_with_sequence_number(
     (
         validator,
         fullnode,
-        to_sender_signed_transaction(data, &keypair),
+        VerifiedTransaction::new_unchecked(to_sender_signed_transaction(data, &keypair)),
         gas_object_id,
         shared_object_id,
     )
@@ -1249,7 +1249,7 @@ async fn test_handle_transfer_transaction_bad_signature() {
         .unwrap();
 
     let (_unknown_address, unknown_key): (_, AccountKeyPair) = get_key_pair();
-    let mut bad_signature_transfer_transaction = transfer_transaction.clone().into_inner();
+    let mut bad_signature_transfer_transaction = transfer_transaction.clone();
     *bad_signature_transfer_transaction
         .data_mut_for_testing()
         .tx_signatures_mut_for_testing() =
@@ -1321,6 +1321,9 @@ async fn test_handle_transfer_transaction_with_max_sequence_number() {
         rgp * TEST_ONLY_GAS_UNIT_FOR_TRANSFER,
         rgp,
     );
+    let transfer_transaction = authority_state
+        .verify_transaction(transfer_transaction)
+        .unwrap();
     let res = authority_state
         .handle_transaction(&epoch_store, transfer_transaction)
         .await;
@@ -1378,6 +1381,10 @@ async fn test_handle_transfer_transaction_unknown_sender() {
         rgp * TEST_ONLY_GAS_UNIT_FOR_TRANSFER,
         rgp,
     );
+
+    let unknown_sender_transfer_transaction = authority_state
+        .verify_transaction(unknown_sender_transfer_transaction)
+        .unwrap();
 
     assert!(authority_state
         .handle_transaction(&epoch_store, unknown_sender_transfer_transaction)
@@ -1464,6 +1471,10 @@ async fn test_handle_transfer_transaction_ok() {
         .await
         .is_err());
 
+    let transfer_transaction = authority_state
+        .verify_transaction(transfer_transaction)
+        .unwrap();
+
     let account_info = authority_state
         .handle_transaction(&epoch_store, transfer_transaction.clone())
         .await
@@ -1541,6 +1552,7 @@ async fn test_handle_sponsored_transaction() {
     );
     let dual_signed_tx =
         to_sender_signed_transaction_with_multi_signers(data, vec![&sender_key, &sponsor_key]);
+    let dual_signed_tx = authority_state.verify_transaction(dual_signed_tx).unwrap();
 
     authority_state
         .handle_transaction(&epoch_store, dual_signed_tx.clone())
@@ -1558,8 +1570,8 @@ async fn test_handle_sponsored_transaction() {
             budget: TEST_ONLY_GAS_UNIT_FOR_TRANSFER * rgp,
         },
     );
-    let dual_signed_tx =
-        to_sender_signed_transaction_with_multi_signers(data, vec![&sender_key, &sponsor_key]);
+    let dual_signed_tx = to_sender_signed_transaction_with_multi_signers(data, vec![&sender_key]);
+    let dual_signed_tx = authority_state.verify_transaction(dual_signed_tx).unwrap();
 
     let error = authority_state
         .handle_transaction(&epoch_store, dual_signed_tx.clone())
@@ -1576,18 +1588,20 @@ async fn test_handle_sponsored_transaction() {
     );
 
     // Verify wrong gas owner gives error, using another address
+    let (wrong_owner, wrong_owner_key): (_, AccountKeyPair) = get_key_pair();
     let data = TransactionData::new_with_gas_data(
         tx_kind.clone(),
         sender,
         GasData {
             payment: vec![gas_object.compute_object_reference()],
-            owner: dbg_addr(42), // <-- wrong
+            owner: wrong_owner, // <-- wrong
             price: rgp,
             budget: TEST_ONLY_GAS_UNIT_FOR_TRANSFER * rgp,
         },
     );
     let dual_signed_tx =
-        to_sender_signed_transaction_with_multi_signers(data, vec![&sender_key, &sponsor_key]);
+        to_sender_signed_transaction_with_multi_signers(data, vec![&sender_key, &wrong_owner_key]);
+    let dual_signed_tx = authority_state.verify_transaction(dual_signed_tx).unwrap();
     let error = authority_state
         .handle_transaction(&epoch_store, dual_signed_tx.clone())
         .await
@@ -1616,6 +1630,7 @@ async fn test_handle_sponsored_transaction() {
     );
     let dual_signed_tx =
         to_sender_signed_transaction_with_multi_signers(data, vec![&sender_key, &third_party_key]);
+    let dual_signed_tx = authority_state.verify_transaction(dual_signed_tx).unwrap();
     let error = authority_state
         .handle_transaction(&epoch_store, dual_signed_tx.clone())
         .await
@@ -1658,6 +1673,9 @@ async fn test_transfer_package() {
         rgp * TEST_ONLY_GAS_UNIT_FOR_TRANSFER,
         rgp,
     );
+    let transfer_transaction = authority_state
+        .verify_transaction(transfer_transaction)
+        .unwrap();
     authority_state
         .handle_transaction(&epoch_store, transfer_transaction.clone())
         .await
@@ -1694,6 +1712,9 @@ async fn test_immutable_gas() {
         rgp * TEST_ONLY_GAS_UNIT_FOR_TRANSFER,
         rgp,
     );
+    let transfer_transaction = authority_state
+        .verify_transaction(transfer_transaction)
+        .unwrap();
     let result = authority_state
         .handle_transaction(&epoch_store, transfer_transaction.clone())
         .await;
@@ -1728,6 +1749,7 @@ async fn test_objected_owned_gas() {
     );
 
     let transaction = to_sender_signed_transaction(data, &sender_key);
+    let transaction = authority_state.verify_transaction(transaction).unwrap();
     let result = authority_state
         .handle_transaction(&epoch_store, transaction)
         .await;
@@ -1886,6 +1908,7 @@ async fn test_publish_non_existing_dependent_module() {
         rgp,
     );
     let transaction = to_sender_signed_transaction(data, &sender_key);
+    let transaction = authority.verify_transaction(transaction).unwrap();
     let response = authority
         .handle_transaction(&epoch_store, transaction)
         .await;
@@ -2019,6 +2042,7 @@ async fn test_conflicting_transactions() {
         rgp * TEST_ONLY_GAS_UNIT_FOR_TRANSFER,
         rgp,
     );
+    let tx1 = authority_state.verify_transaction(tx1).unwrap();
 
     let tx2 = init_transfer_transaction(
         sender,
@@ -2029,6 +2053,8 @@ async fn test_conflicting_transactions() {
         rgp * TEST_ONLY_GAS_UNIT_FOR_TRANSFER,
         rgp,
     );
+
+    let tx2 = authority_state.verify_transaction(tx2).unwrap();
 
     // repeatedly attempt to submit conflicting transactions at the same time, and verify that
     // exactly one succeeds in every case.
@@ -2128,6 +2154,9 @@ async fn test_handle_transfer_transaction_double_spend() {
         rgp,
     );
 
+    let transfer_transaction = authority_state
+        .verify_transaction(transfer_transaction)
+        .unwrap();
     let signed_transaction = authority_state
         .handle_transaction(&epoch_store, transfer_transaction.clone())
         .await
@@ -2203,6 +2232,7 @@ async fn test_missing_package() {
     )
     .unwrap();
     let transaction = to_sender_signed_transaction(data, &sender_key);
+    let transaction = authority_state.verify_transaction(transaction).unwrap();
     let result = authority_state
         .handle_transaction(&epoch_store, transaction)
         .await;
@@ -2250,6 +2280,7 @@ async fn test_type_argument_dependencies() {
     )
     .unwrap();
     let transaction = to_sender_signed_transaction(data, &s1_key);
+    let transaction = authority_state.verify_transaction(transaction).unwrap();
     authority_state
         .handle_transaction(&epoch_store, transaction)
         .await
@@ -2275,6 +2306,7 @@ async fn test_type_argument_dependencies() {
     )
     .unwrap();
     let transaction = to_sender_signed_transaction(data, &s2_key);
+    let transaction = authority_state.verify_transaction(transaction).unwrap();
     authority_state
         .handle_transaction(&epoch_store, transaction)
         .await
@@ -2300,6 +2332,7 @@ async fn test_type_argument_dependencies() {
     )
     .unwrap();
     let transaction = to_sender_signed_transaction(data, &s3_key);
+    let transaction = authority_state.verify_transaction(transaction).unwrap();
     let result = authority_state
         .handle_transaction(&epoch_store, transaction)
         .await;
@@ -3006,6 +3039,7 @@ async fn test_refusal_to_sign_consensus_commit_prologue() {
 
     // Sender is able to sign it.
     let transaction = to_sender_signed_transaction(tx_data, &sender_key);
+    let transaction = authority_state.verify_transaction(transaction).unwrap();
 
     // But the authority should refuse to handle it.
     assert!(matches!(
@@ -3043,6 +3077,7 @@ async fn test_invalid_mutable_clock_parameter() {
     .unwrap();
 
     let transaction = to_sender_signed_transaction(tx_data, &sender_key);
+    let transaction = authority_state.verify_transaction(transaction).unwrap();
 
     let Err(e) = authority_state.handle_transaction(&epoch_store, transaction).await else {
         panic!("Expected handling transaction to fail");
@@ -3082,6 +3117,7 @@ async fn test_valid_immutable_clock_parameter() {
     .unwrap();
 
     let transaction = to_sender_signed_transaction(tx_data, &sender_key);
+    let transaction = authority_state.verify_transaction(transaction).unwrap();
     authority_state
         .handle_transaction(&epoch_store, transaction)
         .await
@@ -3140,12 +3176,13 @@ async fn test_transfer_sui_no_amount() {
 
     // Make sure transaction handling works as usual.
     let transaction = to_sender_signed_transaction(tx_data, &sender_key);
+    let transaction = authority_state.verify_transaction(transaction).unwrap();
     authority_state
         .handle_transaction(&epoch_store, transaction.clone())
         .await
         .unwrap();
 
-    let certificate = init_certified_transaction(transaction, &authority_state);
+    let certificate = init_certified_transaction(transaction.into(), &authority_state);
     let signed_effects = authority_state
         .execute_certificate(&certificate, &authority_state.epoch_store_for_testing())
         .await
@@ -4465,6 +4502,8 @@ async fn make_test_transaction(
 
     for authority in authorities {
         let epoch_store = authority.load_epoch_store_one_call_per_task();
+        let transaction = transaction.clone();
+        let transaction = authority.verify_transaction(transaction).unwrap();
         let response = authority
             .handle_transaction(&epoch_store, transaction.clone())
             .await
